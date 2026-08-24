@@ -94,10 +94,15 @@ its place only when different callers should reach different backing models.
 
 ## Batching
 
-Documents are grouped by count and by length, and the groups are scored one
-after another rather than all at once. Sequential on purpose: a burst of
-parallel calls against one API key is exactly what exhausts a per-minute quota,
-which is the thing this was meant to relieve.
+Documents are grouped by count and by length. A few groups are scored at a
+time — `batch_concurrency`, three by default.
+
+Strictly one after another was the first version and it was too slow to live
+with: fifty-nine documents went as three batches whose seconds added up to four,
+and a person waits through all of them before an answer starts. Strictly all at
+once is the other mistake — a burst of parallel calls against one key is exactly
+what exhausts a per-minute quota, which is the thing this was meant to relieve.
+Three at a time is neither. Set it to 1 for the old behaviour.
 
 Because the rubric is absolute — each passage judged on its own, not against its
 neighbours — scores from different batches are comparable. A rubric that asked

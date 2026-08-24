@@ -63,6 +63,14 @@ DEFAULTS = {
     "batch_chars": 24000,
     # И сколько документов за раз, чтобы модель не теряла счёт в длинном списке.
     "batch_documents": 24,
+    # Сколько пачек считать одновременно.
+    #
+    # Совсем последовательно -- безопасно, но медленно: пятьдесят девять
+    # документов уходят тремя пачками и складывают свои секунды одна к другой,
+    # а ждёт этого человек перед каждым ответом. Единица возвращает прежнее
+    # поведение. Большое число здесь ни к чему: залп по одному ключу и есть то,
+    # что выбирает минутную квоту.
+    "batch_concurrency": 3,
     "request_timeout_s": 60.0,
     "retries": 2,
     "log_level": "info",
@@ -370,11 +378,17 @@ async def do_rerank(parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
     groups = batches(texts)
 
     async with httpx.AsyncClient(timeout=float(CONFIG["request_timeout_s"])) as client:
-        # Пачки идут последовательно нарочно: параллельный залп по одному ключу
-        # и есть то, от чего страдает квота.
+        limit = asyncio.Semaphore(max(1, int(CONFIG.get("batch_concurrency") or 1)))
+
+        async def run(group: List[int]) -> Dict[int, float]:
+            async with limit:
+                return await score_batch(
+                    client, parsed["query"], texts, group, parsed["backend_model"]
+                )
+
         scores: Dict[int, float] = {}
-        for group in groups:
-            scores.update(await score_batch(client, parsed["query"], texts, group, parsed["backend_model"]))
+        for part in await asyncio.gather(*(run(group) for group in groups)):
+            scores.update(part)
 
     missing = [i for i in range(len(texts)) if i not in scores]
 

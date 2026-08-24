@@ -12,5 +12,6 @@
   "api_key": "",
   "model_map": {
     "cohere/rerank-v3.5": "gemini-3.5-flash-lite"
-  }
+  },
+  "batch_concurrency": 3
 }
