@@ -20,6 +20,18 @@ general-purpose model reads the list and assigns numbers by a written rule. They
 will not always agree, and `compare.py` exists so that the disagreement is
 measured rather than assumed.
 
+## What is being scored
+
+Not "does this passage answer the query". A retrieval-augmented memory consults
+itself on every turn, and what it passes as the query is usually a stretch of
+conversation -- a remark, a correction, an aside -- with nothing being asked at
+all. Score passages for answering under those conditions and almost everything
+scores nothing, correctly and uselessly.
+
+So the rubric scores usefulness as background: is this passage about what is
+being discussed, would it help someone pick the conversation up. That is what a
+trained reranker does by construction, and what a general model has to be told.
+
 ## The scale, and why it is what it is
 
 The scores are not invented. They were taken from a live `cohere/rerank-v3.5`
