@@ -170,7 +170,7 @@ async def main_async(args) -> None:
     print("\n\033[1mКакой порог отсекает лучше\033[0m  (по разметке, "
           f"{len(labelled)} случаев из {len(summary)})")
     print(f"  {'порог':>6}  {'эталон: нашёл / лишних':>26}  {'наш: нашёл / лишних':>24}")
-    best = None
+    rows = []
     for step in range(1, 20):
         floor = step / 20
         row = {}
@@ -186,14 +186,26 @@ async def main_async(args) -> None:
         oh, om, oe = row["ours"]
         # Промах дороже лишнего: потерянный факт исчезает из памяти совсем, а
         # лишний всего лишь занимает место в контексте.
-        cost = om * 2 + oe
-        mark = ""
-        if best is None or cost < best[1]:
-            best, mark = (floor, cost), ""
-        print(f"  {floor:>6.2f}  {f'{th} / {te}':>26}  {f'{oh} / {oe}':>24}{mark}")
-    if best:
-        print(f"\n  лучший порог для нашей шкалы: \033[1m{best[0]:.2f}\033[0m "
-              f"(промах считается вдвое дороже лишнего)")
+        rows.append((floor, om * 2 + oe, th, te, oh, oe))
+
+    for floor, _, th, te, oh, oe in rows:
+        print(f"  {floor:>6.2f}  {f'{th} / {te}':>26}  {f'{oh} / {oe}':>24}")
+
+    # Не первая лучшая точка, а середина полосы, где лучший счёт держится.
+    #
+    # Край плато -- плохой выбор: шаг в сторону, и качество падает. Корпус
+    # всегда мал по сравнению с тем, что придёт в жизни, так что ставить надо
+    # подальше от обоих обрывов.
+    cheapest = min(r[1] for r in rows)
+    plateau = [r[0] for r in rows if r[1] == cheapest]
+    if plateau:
+        low, high = min(plateau), max(plateau)
+        middle = min(plateau, key=lambda f: abs(f - (low + high) / 2))
+        span = f"{low:.2f}" if low == high else f"{low:.2f}–{high:.2f}"
+        print(f"\n  лучший счёт держится на {span}; ставить стоит в середину: "
+              f"\033[1m{middle:.2f}\033[0m")
+        if low == high:
+            print("  \033[33mполоса шириной в одну точку — качество упадёт от любого сдвига\033[0m")
 
 
 def main() -> None:
