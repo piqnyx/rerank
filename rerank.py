@@ -412,6 +412,19 @@ async def do_rerank(parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
         results = results[: parsed["top_n"]]
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
+
+    # Под debug -- что спрашивали и что получилось. Счётчиков мало: когда recall
+    # возвращает пустоту, вопрос всегда один -- занизил ли ранжировщик нужное или
+    # нужного не было среди кандидатов, и различить это можно только увидев оба.
+    if logger.isEnabledFor(logging.DEBUG):
+        tail = " ".join(parsed["query"].split())
+        logger.debug("query (%d chars) ends: …%s", len(parsed["query"]), tail[-160:])
+        top = sorted(scores, key=lambda i: -scores[i])[:8]
+        for index in top:
+            logger.debug("  %.3f  %s", scores[index], " ".join(texts[index].split())[:88])
+        if missing:
+            logger.debug("  без оценки: %d", len(missing))
+
     logger.info(
         "rerank %d docs in %d batch(es), %d scored, %d unscored, %dms",
         len(texts), len(groups), len(scores), len(missing), elapsed_ms,
