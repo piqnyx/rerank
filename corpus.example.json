@@ -21,5 +21,45 @@
       "The service was written in Python and listens on the loopback.",
       "Cron runs commands on a schedule described in crontab."
     ]
+  },
+  {
+    "query": "who wrote the novel",
+    "documents": [
+      "The novel was written by an author who never published under her own name.",
+      "The novel sold four million copies in its first year.",
+      "Novels of that period were usually serialised in magazines first.",
+      "The film adaptation was directed by someone else entirely.",
+      "Paper was expensive, which is why early editions were thin."
+    ]
+  },
+  {
+    "query": "why is the disk filling up",
+    "documents": [
+      "The log directory had grown to ninety gigabytes because rotation was off.",
+      "Disk usage can be inspected with du and df.",
+      "The disk is a two-terabyte NVMe drive.",
+      "Memory usage has been stable for weeks.",
+      "Log rotation is configured in logrotate.conf.",
+      "The backup job runs nightly and writes to a different volume."
+    ]
+  },
+  {
+    "query": "nothing here answers this",
+    "documents": [
+      "Bread dough should rest before it is shaped.",
+      "The ferry leaves twice a day in winter.",
+      "Copper conducts heat better than steel.",
+      "Most cats sleep more than twelve hours a day."
+    ]
+  },
+  {
+    "query": "when was it released",
+    "documents": [
+      "It was released on the fourth of April, 2019.",
+      "The release was delayed twice before it finally shipped.",
+      "Version numbering changed after that release.",
+      "It runs on both Linux and Windows.",
+      "Release notes are published on the project's site."
+    ]
   }
 ]

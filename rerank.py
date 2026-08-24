@@ -86,19 +86,25 @@ RUBRIC = """You score how well each passage answers a search query.
 
 Use the whole 0-100 range, and keep these bands:
 
-90-100 the passage states the answer to the query outright and completely
-70-89  the passage answers the query, possibly among other words
-40-69  the passage is about what was asked and narrows it down, but stops short
+95-100 the passage states the answer outright, with nothing missing
+75-94  the passage answers the query, among other words
+40-74  the passage is about what was asked and narrows it down, but stops short
        of answering
-15-39  the passage concerns the same subject as the query but a different
+10-39  the passage concerns the same subject as the query but a different
        property of it, or the same property of a different subject
-5-14   the subject or the property appears in passing, and nothing is answered
-0-4    the passage has no bearing on the query
+3-9    the subject or the property appears in passing, and nothing is answered
+0-2    the passage has no bearing on the query
+
+Most passages in a list do not answer the query, so scores below 10 should be
+the common case. Anything above 40 is for a passage that genuinely addresses
+what was asked; sharing a topic, a field or a few words with the query is not
+addressing it.
 
 Judge each passage on its own. Do not spread scores apart to make a ranking,
 and do not compress them together: two passages that both answer the query
 deserve two high scores, and a list where nothing answers deserves no high
-score at all.
+score at all. Give the number you mean rather than rounding to a multiple of
+five or ten.
 
 Answer with one entry per passage, using the index given to it.
 
