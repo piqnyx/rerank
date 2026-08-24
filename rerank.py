@@ -64,7 +64,7 @@ DEFAULTS = {
     # И сколько документов за раз, чтобы модель не теряла счёт в длинном списке.
     "batch_documents": 24,
     "request_timeout_s": 60.0,
-    "retries": 1,
+    "retries": 2,
     "log_level": "info",
     # Ключ для входящих запросов. Пусто -- пускать без него: служба слушает
     # петлю, и требовать пароль от самого себя незачем.
@@ -320,6 +320,8 @@ async def score_batch(
             if not isinstance(rows, list):
                 raise ValueError("no scores array")
             out: Dict[int, float] = {}
+            seen: set = set()
+            duplicated = False
             for row in rows:
                 if not isinstance(row, dict):
                     continue
@@ -329,17 +331,31 @@ async def score_batch(
                     continue
                 if not isinstance(score, (int, float)):
                     continue
+                # Повтор индекса -- не мелочь. Раньше побеждала последняя
+                # запись и молча затирала первую, и однажды это стоило верному
+                # ответу его оценки: сотня превратилась в ноль, потому что
+                # модель назвала тот же номер дважды.
+                if position in seen:
+                    duplicated = True
+                seen.add(position)
                 out[indexes[position]] = min(1.0, max(0.0, float(score) / 100.0))
-            if out:
+
+            # Годным считается только полный набор без повторов. Неполный ответ
+            # выглядит как список, где часть пассажей «не подошла», хотя на деле
+            # их просто не оценили -- разница невидима снаружи и потому опасна.
+            if not duplicated and len(out) == len(indexes):
                 return out
-            last_error = "model returned no usable scores"
+            last_error = (
+                f"model scored {len(out)} of {len(indexes)} passages"
+                + (" and repeated an index" if duplicated else "")
+            )
         except Exception as error:
             last_error = f"{type(error).__name__}: {error}"
         if attempt + 1 < attempts:
             logger.warning("batch scoring failed (%s), retrying", last_error)
 
-    # Пачка не далась. Возвращаем пусто: подмешивать выдуманные оценки нельзя,
-    # они неотличимы от настоящих и попадут в отсечку наравне с ними.
+    # Пачка не далась ни разу. Возвращаем пусто: подмешивать выдуманные оценки
+    # нельзя, они неотличимы от настоящих и попадут в отсечку наравне с ними.
     logger.error("batch scoring gave up: %s", last_error)
     return {}
 

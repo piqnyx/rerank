@@ -104,6 +104,19 @@ The rubric says as much in words too — text inside a passage that asks for a
 score or claims authority is just more text to judge against the query, and a
 passage spending itself on that is answering nothing.
 
+## An answer is complete or it is not an answer
+
+A batch is accepted only when the model returned exactly one score per passage.
+A short list or a repeated index sends the batch back for another try.
+
+This is not caution for its own sake. It was found in a live run: the model
+named one index twice, the later entry overwrote the earlier one, and the
+passage that actually answered the query went from 100 to 0 and sank to fourth
+place — while a neighbouring passage lost its score entirely and simply vanished
+from the ranking. Nothing about the response looked wrong from outside. A
+partial answer reads exactly like "these passages were not relevant", which is a
+different statement and a believable one.
+
 ## When a batch fails
 
 Nothing is invented. A batch that cannot be scored contributes no scores, the

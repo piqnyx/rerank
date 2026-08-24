@@ -7,7 +7,7 @@
   "batch_documents": 24,
   "batch_chars": 24000,
   "request_timeout_s": 60.0,
-  "retries": 1,
+  "retries": 2,
   "log_level": "info",
   "api_key": "",
   "model_map": {
