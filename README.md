@@ -146,9 +146,15 @@ Mark up the corpus and the threshold stops being a guess:
 
 `relevant` lists the passages that ought to survive. With it, the summary sweeps
 the floor from 0.05 to 0.95 and reports, for each, how many wanted passages each
-reranker found and how many unwanted came with them — then names the floor that
-costs least, counting a lost passage as twice the price of a spare one. A lost
-passage disappears from memory; a spare one only takes up room.
+reranker found and how many unwanted came with them — counting a lost passage as
+twice the price of a spare one, since a lost passage disappears from memory
+while a spare only takes up room.
+
+What it names is not the first floor that scores best but the **middle of the
+band** where the best score holds. The edge of a plateau is a poor place to
+stand: one step and the quality falls, and any corpus is small next to what
+arrives in use. When the band turns out to be a single point, it says so — that
+is a threshold nobody should trust.
 
 Two things the harness deliberately does **not** do. It does not treat the
 reference as ground truth — on one of the sample queries the hosted reranker
