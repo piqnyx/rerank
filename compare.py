@@ -41,6 +41,19 @@ def spearman(a: Dict[int, int], b: Dict[int, int]) -> Optional[float]:
     return 1 - (6 * diff) / (n * (n * n - 1))
 
 
+def flat(scores: Dict[int, float]) -> bool:
+    """Все оценки одинаковы -- значит порядка нет вовсе.
+
+    Так выглядит правильный ответ на запрос, которому не подходит ничто. Место
+    в таком списке присвоено произвольно, и сравнивать эти места с чужими --
+    значит выдать согласие за расхождение. У нас так и вышло: запрос, где обе
+    стороны честно не оставили ни одного пассажа, был засчитан как разногласие
+    и утянул среднее вниз.
+    """
+    values = set(round(v, 6) for v in scores.values())
+    return len(values) <= 1
+
+
 async def call(url: str, payload: Dict[str, Any], key: Optional[str]) -> Dict[str, Any]:
     headers = {"Authorization": f"Bearer {key}"} if key else None
     async with httpx.AsyncClient(timeout=120.0) as client:
@@ -88,14 +101,32 @@ async def one_case(case: Dict[str, Any], args) -> Tuple[str, Dict[str, Any]]:
 
     kept_t = sum(1 for v in theirs.values() if v >= args.floor)
     kept_o = sum(1 for v in ours.values() if v >= args.floor)
-    top1 = "совпал" if (tr and orr and min(tr, key=tr.get) == min(orr, key=orr.get)) else "РАЗНЫЙ"
-    rho = spearman(tr, orr)
+
+    # Ничья с обеих сторон -- согласие, а не разногласие.
+    tie = flat(theirs) or flat(ours)
+    if tie and kept_t == 0 and kept_o == 0:
+        rho, top1 = None, "оба пусты"
+    else:
+        rho = spearman(tr, orr)
+        top1 = "совпал" if (tr and orr and min(tr, key=tr.get) == min(orr, key=orr.get)) else "РАЗНЫЙ"
+
     print(f"  порядок: ρ={('—' if rho is None else f'{rho:+.2f}')}   первый: {top1}   "
           f"порог {args.floor}: эталон оставит {kept_t}, наш {kept_o}")
 
+    truth = case.get("relevant")
+    if truth is not None:
+        marks = []
+        for name, scores in (("эталон", theirs), ("наш", ours)):
+            kept = {i for i, v in scores.items() if v >= args.floor}
+            hit = len(kept & set(truth))
+            marks.append(f"{name}: нашёл {hit} из {len(truth)}, лишних {len(kept) - hit}")
+        print("  по разметке — " + ";  ".join(marks))
+
     return case["query"], {
-        "rho": rho, "top1_same": top1 == "совпал",
+        "rho": rho, "top1_same": top1 == "совпал", "tie": tie,
         "kept_reference": kept_t, "kept_ours": kept_o, "total": total,
+        "truth": set(truth) if truth is not None else None,
+        "theirs": theirs, "ours": ours,
     }
 
 
@@ -113,18 +144,56 @@ async def main_async(args) -> None:
 
     if not summary:
         return
-    rhos = [s["rho"] for _, s in summary if s["rho"] is not None]
-    same_top = sum(1 for _, s in summary if s["top1_same"])
+
+    # Ничьи из среднего исключаются: там порядка нет ни у кого, и считать по
+    # ним согласие -- значит портить среднее артефактом.
+    ranked = [s for _, s in summary if not s["tie"]]
+    rhos = [s["rho"] for s in ranked if s["rho"] is not None]
+    same_top = sum(1 for s in ranked if s["top1_same"])
     kept_ref = sum(s["kept_reference"] for _, s in summary)
     kept_our = sum(s["kept_ours"] for _, s in summary)
+
     print("\n\033[1mИтого\033[0m")
-    print(f"  случаев: {len(summary)}")
-    print(f"  первый пассаж совпал: {same_top} из {len(summary)}")
+    print(f"  случаев: {len(summary)}, из них с ничьёй: {len(summary) - len(ranked)}")
+    if ranked:
+        print(f"  первый пассаж совпал: {same_top} из {len(ranked)}")
     if rhos:
-        print(f"  согласие порядков в среднем: ρ={sum(rhos)/len(rhos):+.2f}")
+        print(f"  согласие порядков в среднем: ρ={sum(rhos)/len(rhos):+.2f}  (ничьи не в счёт)")
     print(f"  с порогом {args.floor} эталон пропустил бы {kept_ref}, наш {kept_our}")
-    if kept_ref and abs(kept_our - kept_ref) / kept_ref > 0.3:
-        print("  \033[33mрасхождение по отсечке больше трети — порог придётся пересчитать\033[0m")
+
+    labelled = [s for _, s in summary if s["truth"] is not None]
+    if not labelled:
+        print("\n  Чтобы подобрать порог числом, а не на глаз, разметь корпус:")
+        print('  добавь в случай поле "relevant": [индексы пассажей, которые должны пережить отсечку]')
+        return
+
+    print("\n\033[1mКакой порог отсекает лучше\033[0m  (по разметке, "
+          f"{len(labelled)} случаев из {len(summary)})")
+    print(f"  {'порог':>6}  {'эталон: нашёл / лишних':>26}  {'наш: нашёл / лишних':>24}")
+    best = None
+    for step in range(1, 20):
+        floor = step / 20
+        row = {}
+        for name in ("theirs", "ours"):
+            hit = miss = extra = 0
+            for s in labelled:
+                kept = {i for i, v in s[name].items() if v >= floor}
+                hit += len(kept & s["truth"])
+                miss += len(s["truth"] - kept)
+                extra += len(kept - s["truth"])
+            row[name] = (hit, miss, extra)
+        th, tm, te = row["theirs"]
+        oh, om, oe = row["ours"]
+        # Промах дороже лишнего: потерянный факт исчезает из памяти совсем, а
+        # лишний всего лишь занимает место в контексте.
+        cost = om * 2 + oe
+        mark = ""
+        if best is None or cost < best[1]:
+            best, mark = (floor, cost), ""
+        print(f"  {floor:>6.2f}  {f'{th} / {te}':>26}  {f'{oh} / {oe}':>24}{mark}")
+    if best:
+        print(f"\n  лучший порог для нашей шкалы: \033[1m{best[0]:.2f}\033[0m "
+              f"(промах считается вдвое дороже лишнего)")
 
 
 def main() -> None:

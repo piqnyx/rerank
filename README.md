@@ -123,9 +123,26 @@ OPENROUTER_API_KEY=... python3 compare.py corpus.example.json --floor 0.11
 ```
 
 Each case prints both rankings side by side, marks what each would keep at the
-floor, and points at the rows where they disagree. The summary answers the only
-question that matters in the end: with the threshold you actually run, does the
-same set of passages survive?
+floor, and points at the rows where they disagree.
+
+Mark up the corpus and the threshold stops being a guess:
+
+```json
+{ "query": "...", "documents": ["..."], "relevant": [0, 4] }
+```
+
+`relevant` lists the passages that ought to survive. With it, the summary sweeps
+the floor from 0.05 to 0.95 and reports, for each, how many wanted passages each
+reranker found and how many unwanted came with them — then names the floor that
+costs least, counting a lost passage as twice the price of a spare one. A lost
+passage disappears from memory; a spare one only takes up room.
+
+Two things the harness deliberately does **not** do. It does not treat the
+reference as ground truth — on one of the sample queries the hosted reranker
+scored the actual answer third, below a passage about the size of the disk, and
+kept nothing at all at the usual floor. And it does not count a query where
+nothing is relevant as a disagreement: when every score is equal there is no
+order to compare, and both sides keeping nothing is agreement, not conflict.
 
 ## Install
 

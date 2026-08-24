@@ -9,6 +9,9 @@
       "The Portuguese language is spoken by around 250 million people.",
       "Trams have run through Lisbon's hills since the nineteenth century.",
       "Grand Central Terminal is a railway station in New York City."
+    ],
+    "relevant": [
+      0
     ]
   },
   {
@@ -20,6 +23,9 @@
       "Docker containers are restarted with docker restart.",
       "The service was written in Python and listens on the loopback.",
       "Cron runs commands on a schedule described in crontab."
+    ],
+    "relevant": [
+      0
     ]
   },
   {
@@ -30,6 +36,9 @@
       "Novels of that period were usually serialised in magazines first.",
       "The film adaptation was directed by someone else entirely.",
       "Paper was expensive, which is why early editions were thin."
+    ],
+    "relevant": [
+      0
     ]
   },
   {
@@ -41,6 +50,10 @@
       "Memory usage has been stable for weeks.",
       "Log rotation is configured in logrotate.conf.",
       "The backup job runs nightly and writes to a different volume."
+    ],
+    "relevant": [
+      0,
+      4
     ]
   },
   {
@@ -50,7 +63,8 @@
       "The ferry leaves twice a day in winter.",
       "Copper conducts heat better than steel.",
       "Most cats sleep more than twelve hours a day."
-    ]
+    ],
+    "relevant": []
   },
   {
     "query": "when was it released",
@@ -60,6 +74,9 @@
       "Version numbering changed after that release.",
       "It runs on both Linux and Windows.",
       "Release notes are published on the project's site."
+    ],
+    "relevant": [
+      0
     ]
   }
 ]
