@@ -69,6 +69,15 @@ DEFAULTS = {
     # Ключ для входящих запросов. Пусто -- пускать без него: служба слушает
     # петлю, и требовать пароль от самого себя незачем.
     "api_key": "",
+    # Чем отвечать на чужие имена моделей.
+    #
+    # Клиенты настроены на настоящий реранкер и продолжат просить его по имени:
+    # graphiti своим, OpenViking своим, и менять это ради нас незачем. Имя из
+    # запроса здесь никогда не проверяется -- отказать клиенту за то, что он
+    # попросил ровно то, на что настроен, было бы издевательством. По умолчанию
+    # любое имя обслуживает model; сопоставление нужно лишь тогда, когда разным
+    # именам полагаются разные модели.
+    "model_map": {},
 }
 
 # Соответствие оценок 0-100 тому, что ставит настоящий реранкер. Полосы, а не
@@ -145,6 +154,14 @@ class BadRequest(Exception):
     pass
 
 
+def backend_for(asked: str) -> str:
+    """Какой моделью отвечать на запрошенное имя."""
+    mapping = CONFIG.get("model_map") or {}
+    if isinstance(mapping, dict) and asked in mapping and mapping[asked]:
+        return str(mapping[asked])
+    return str(CONFIG["model"])
+
+
 def document_text(entry: Any, rank_fields: Optional[List[str]]) -> str:
     """
     Cohere принимает и строку, и объект.
@@ -209,8 +226,16 @@ def parse_request(body: Dict[str, Any]) -> Dict[str, Any]:
         if top_n < 1:
             raise BadRequest("top_n must be at least 1")
 
+    # Имя из запроса возвращается в ответе как есть: клиент узнаёт то, что
+    # просил. Отвечает же на него та модель, которую выбрало сопоставление.
+    asked = body.get("model")
+    if asked is not None and not isinstance(asked, str):
+        raise BadRequest("model must be a string")
+    asked = (asked or "").strip()
+
     return {
-        "model": body.get("model") or CONFIG["model"],
+        "model": asked or CONFIG["model"],
+        "backend_model": backend_for(asked),
         "query": query,
         "documents": documents,
         "texts": texts,
@@ -261,9 +286,9 @@ def build_prompt(query: str, texts: List[str], indexes: List[int]) -> str:
 
 
 async def score_batch(
-    client: httpx.AsyncClient, query: str, texts: List[str], indexes: List[int]
+    client: httpx.AsyncClient, query: str, texts: List[str], indexes: List[int], model: str
 ) -> Dict[int, float]:
-    url = f"{CONFIG['upstream_base_url'].rstrip('/')}/v1beta/models/{CONFIG['model']}:generateContent"
+    url = f"{CONFIG['upstream_base_url'].rstrip('/')}/v1beta/models/{model}:generateContent"
     payload = {
         "systemInstruction": {"parts": [{"text": RUBRIC}]},
         "contents": [{"role": "user", "parts": [{"text": build_prompt(query, texts, indexes)}]}],
@@ -324,7 +349,7 @@ async def do_rerank(parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
         # и есть то, от чего страдает квота.
         scores: Dict[int, float] = {}
         for group in groups:
-            scores.update(await score_batch(client, parsed["query"], texts, group))
+            scores.update(await score_batch(client, parsed["query"], texts, group, parsed["backend_model"]))
 
     missing = [i for i in range(len(texts)) if i not in scores]
 
@@ -335,7 +360,7 @@ async def do_rerank(parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
         logger.error("nothing could be scored for %d documents", len(texts))
         return {
             "message": f"the scoring model returned nothing usable for {len(texts)} documents",
-            "meta": {"backend": {"model": CONFIG["model"], "batches": len(groups)}},
+            "meta": {"backend": {"model": parsed["backend_model"], "batches": len(groups)}},
         }, 502
     results = []
     for index in sorted(scores, key=lambda i: -scores[i]):
@@ -361,7 +386,7 @@ async def do_rerank(parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
         "meta": {
             "api_version": {"version": "2"},
             "billed_units": {"search_units": len(groups)},
-            "backend": {"model": CONFIG["model"], "batches": len(groups), "took_ms": elapsed_ms},
+            "backend": {"model": parsed["backend_model"], "batches": len(groups), "took_ms": elapsed_ms},
         },
     }
     if missing:

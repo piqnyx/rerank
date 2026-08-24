@@ -9,5 +9,8 @@
   "request_timeout_s": 60.0,
   "retries": 1,
   "log_level": "info",
-  "api_key": ""
+  "api_key": "",
+  "model_map": {
+    "cohere/rerank-v3.5": "gemini-3.5-flash-lite"
+  }
 }

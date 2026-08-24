@@ -62,6 +62,24 @@ result looks wrong and the question is why.
 
 Paths: `/rerank`, `/v1/rerank`, `/v2/rerank`.
 
+## The model name is the caller's, not ours
+
+Clients are configured against a real reranker and will keep asking for it by
+name. That name is never validated here — refusing a caller for asking exactly
+what it was set up to ask would be perverse — and it comes back in the response
+unchanged, so the caller sees what it requested.
+
+What answers it is chosen by `model_map`, falling back to `model`:
+
+```json
+"model": "gemini-3.5-flash-lite",
+"model_map": { "cohere/rerank-v3.5": "gemini-3.5-flash-lite" }
+```
+
+An empty map is the normal case: everything is served by `model`. The map earns
+its place only when different callers should reach different backing models.
+`meta.backend.model` always says which one actually answered.
+
 ## Batching
 
 Documents are grouped by count and by length, and the groups are scored one
@@ -113,7 +131,11 @@ same set of passages survive?
 
 ```bash
 cp config.example.json config.json   # edit the upstream and the model
-python3 -m pip install -r requirements.txt
+# Debian and its relatives refuse a system-wide pip (PEP 668). Either take the
+# packages from the distribution, or put them in a virtual environment and point
+# ExecStart at its python:
+sudo apt install python3-fastapi python3-uvicorn python3-httpx
+#   or: python3 -m venv venv && venv/bin/pip install -r requirements.txt
 cp rerank.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now rerank
 curl -s http://127.0.0.1:8790/health
