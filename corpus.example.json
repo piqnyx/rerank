@@ -1,0 +1,25 @@
+[
+  {
+    "query": "what is the capital of Portugal",
+    "documents": [
+      "Lisbon is the capital and largest city of Portugal.",
+      "Portugal is a country on the Iberian Peninsula.",
+      "Lisbon has a humid subtropical climate with mild winters.",
+      "Madrid is the capital of Spain.",
+      "The Portuguese language is spoken by around 250 million people.",
+      "Trams have run through Lisbon's hills since the nineteenth century.",
+      "Grand Central Terminal is a railway station in New York City."
+    ]
+  },
+  {
+    "query": "how do I restart the service after changing its unit file",
+    "documents": [
+      "Run systemctl daemon-reload, then systemctl restart on the unit.",
+      "A unit file lives under /etc/systemd/system or in the user directory.",
+      "systemctl status shows whether a unit is running and its recent log.",
+      "Docker containers are restarted with docker restart.",
+      "The service was written in Python and listens on the loopback.",
+      "Cron runs commands on a schedule described in crontab."
+    ]
+  }
+]

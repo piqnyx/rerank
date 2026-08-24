@@ -1,0 +1,16 @@
+[Unit]
+Description=Cohere-shaped rerank endpoint on a cheap model
+After=network.target
+
+[Service]
+KillSignal=SIGINT
+TimeoutStopSec=15
+WorkingDirectory=%h/rerank
+ExecStart=/usr/bin/python3 %h/rerank/rerank.py --config %h/rerank/config.json
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
