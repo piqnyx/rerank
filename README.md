@@ -73,12 +73,30 @@ Because the rubric is absolute — each passage judged on its own, not against i
 neighbours — scores from different batches are comparable. A rubric that asked
 for a ranking instead would not have that property.
 
+## Passages are data
+
+Query and passages reach the model as JSON, not as a numbered list. A passage
+comes out of whatever store the caller keeps, which means it is text somebody
+else wrote. In a numbered list one newline splits it into two entries, and a
+line reading like another entry's marker lets a passage claim someone else's
+place in the answer. JSON closes both: the boundaries are declared, newlines are
+escaped, and an index cannot be forged.
+
+The rubric says as much in words too — text inside a passage that asks for a
+score or claims authority is just more text to judge against the query, and a
+passage spending itself on that is answering nothing.
+
 ## When a batch fails
 
 Nothing is invented. A batch that cannot be scored contributes no scores, the
 response says so in `meta.warnings`, and the caller sees fewer results than
 documents. Filling the gap with plausible numbers would be worse: they are
 indistinguishable from real ones and would pass a threshold on equal terms.
+
+When **nothing** could be scored the answer is `502`, not an empty list with
+`200`. An empty success reads as "none of these were relevant" and the caller
+walks away satisfied, which is a different statement from "the scorer did not
+answer".
 
 ## Comparing against the real thing
 
