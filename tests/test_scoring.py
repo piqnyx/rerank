@@ -137,12 +137,24 @@ class TheAnswerTests(unittest.TestCase):
         self.assertEqual(run(provider), {})
 
     def test_a_refusal_gives_nothing_rather_than_invented_scores(self):
+        rerank.CONFIG["retries"] = 2
         provider = Provider({"choices": [{"finish_reason": "content_filter", "message": {}}]})
         self.assertEqual(run(provider), {})
+        self.assertEqual(len(provider.calls), 1,
+                         "отказ отправлен второй раз тем же телом")
+
+    def test_no_choices_at_all_is_not_retried_either(self):
+        # Графити на этой же двери считает такой ответ окончательным; две части
+        # одной работы не должны расходиться на одной форме провода.
+        rerank.CONFIG["retries"] = 2
+        provider = Provider({"choices": []})
+        self.assertEqual(run(provider), {})
+        self.assertEqual(len(provider.calls), 1)
 
     def test_a_batch_that_failed_once_is_tried_again(self):
+        # Пустой ответ -- икота, а не отказ: его повторить стоит.
         rerank.CONFIG["retries"] = 1
-        provider = Provider({"choices": []}, scores((0, 40), (1, 60)))
+        provider = Provider(said(""), scores((0, 40), (1, 60)))
         self.assertEqual(run(provider), {0: 0.4, 1: 0.6})
         self.assertEqual(len(provider.calls), 2)
 

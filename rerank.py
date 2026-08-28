@@ -302,6 +302,16 @@ def build_prompt(query: str, texts: List[str], indexes: List[int]) -> str:
     )
 
 
+class Refused(ValueError):
+    """Провайдер отказал, и повтор тем же телом получит тот же отказ.
+
+    Отдельный тип, потому что повтор стоит настоящего запроса из считаемой
+    квоты. Пустой ответ или сорванный сокет повторить стоит -- отказ фильтра и
+    ответ без единого варианта не стоит: те же байты дадут то же самое, а
+    графити на этой же двери уже считает такой ответ окончательным.
+    """
+
+
 def answer_text(body: Dict[str, Any]) -> str:
     """Текст ответа, или внятная ошибка вместо него.
 
@@ -316,9 +326,11 @@ def answer_text(body: Dict[str, Any]) -> str:
     """
     choices = body.get("choices") or []
     if not choices:
-        raise ValueError("provider returned no choices at all")
+        raise Refused("provider returned no choices at all")
     choice = choices[0] if isinstance(choices[0], dict) else {}
     reason = choice.get("finish_reason")
+    if "content_filter" in str(reason or "").lower():
+        raise Refused(f"provider refused the prompt (finish_reason={reason!r})")
     text = (choice.get("message") or {}).get("content")
     if not isinstance(text, str) or not text.strip():
         raise ValueError(f"empty answer (finish_reason={reason!r})")
@@ -398,6 +410,11 @@ async def score_batch(
                 f"model scored {len(out)} of {len(indexes)} passages"
                 + (" and repeated an index" if duplicated else "")
             )
+        except Refused as refusal:
+            # Второй раз тем же телом -- это тот же отказ и ещё один запрос из
+            # минуты. Выходим сразу.
+            last_error = f"{type(refusal).__name__}: {refusal}"
+            break
         except Exception as error:
             last_error = f"{type(error).__name__}: {error}"
         if attempt + 1 < attempts:
