@@ -302,19 +302,57 @@ def build_prompt(query: str, texts: List[str], indexes: List[int]) -> str:
     )
 
 
+def answer_text(body: Dict[str, Any]) -> str:
+    """Текст ответа, или внятная ошибка вместо него.
+
+    Провайдер может вернуть отказ, обрыв или пустоту, и все три приходят как
+    успешный ответ с пустым местом внутри. Обращение к нему вслепую роняло бы
+    KeyError или IndexError, а по ним из лога не понять, что случилось, --
+    поэтому каждый случай называется своим словом. Наверху их ловит повтор.
+
+    Ограду вокруг json снимаем: провайдеры openai-совместимой двери иногда
+    оборачивают ответ в ```json даже когда схема задана, и голый json.loads на
+    этом ломается.
+    """
+    choices = body.get("choices") or []
+    if not choices:
+        raise ValueError("provider returned no choices at all")
+    choice = choices[0] if isinstance(choices[0], dict) else {}
+    reason = choice.get("finish_reason")
+    text = (choice.get("message") or {}).get("content")
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError(f"empty answer (finish_reason={reason!r})")
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```[a-zA-Z0-9_-]*[ \t]*\r?\n?", "", stripped)
+        stripped = re.sub(r"\r?\n?```[ \t]*$", "", stripped)
+    return stripped.strip()
+
+
 async def score_batch(
     client: httpx.AsyncClient, query: str, texts: List[str], indexes: List[int], model: str
 ) -> Dict[int, float]:
-    url = f"{CONFIG['upstream_base_url'].rstrip('/')}/v1beta/models/{model}:generateContent"
+    # Дверь openai, а не родная гугловая. Родной у прокси остался ровно один
+    # ходок -- этот, -- и ради него живьём держалась целая дверь со своим
+    # разбором тела и своими настройками безопасности. Дверь одна, и говорят в
+    # неё все: чат, граф, викинг, планировщик запросов и мы.
+    url = f"{CONFIG['upstream_base_url'].rstrip('/')}/v1beta/openai/chat/completions"
     payload = {
-        "systemInstruction": {"parts": [{"text": RUBRIC}]},
-        "contents": [{"role": "user", "parts": [{"text": build_prompt(query, texts, indexes)}]}],
-        "generationConfig": {
-            # Ноль, потому что одинаковый запрос обязан давать одинаковый порядок:
-            # иначе один и тот же поиск дважды подряд вернёт разное.
-            "temperature": 0,
-            "responseMimeType": "application/json",
-            "responseSchema": SCORE_SCHEMA,
+        "model": model,
+        "messages": [
+            {"role": "system", "content": RUBRIC},
+            {"role": "user", "content": build_prompt(query, texts, indexes)},
+        ],
+        # Ноль, потому что одинаковый запрос обязан давать одинаковый порядок:
+        # иначе один и тот же поиск дважды подряд вернёт разное.
+        "temperature": 0,
+        # Без "strict": строгий режим требует своего подмножества схемы --
+        # additionalProperties: false и все поля обязательными, -- и на этой
+        # двери он не нужен: схему тут держит сам провайдер. Форма взята с
+        # графити, который ходит в ту же дверь и тем же способом.
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "scores", "schema": SCORE_SCHEMA},
         },
     }
 
@@ -325,7 +363,7 @@ async def score_batch(
             response = await client.post(url, json=payload)
             response.raise_for_status()
             body = response.json()
-            text = body["candidates"][0]["content"]["parts"][0]["text"]
+            text = answer_text(body)
             parsed = json.loads(text)
             rows = parsed.get("scores")
             if not isinstance(rows, list):
