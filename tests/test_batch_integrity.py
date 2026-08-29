@@ -265,14 +265,16 @@ class TwoIndexSpacesTests(unittest.TestCase):
         self.assertEqual(sorted(out), [2, 3], "оценки легли не на те документы")
         self.assertGreater(out[2], out[3])
 
-    def test_a_position_outside_the_batch_is_dropped(self):
-        # Модель назвала номер, которого в пачке нет. Раньше `len(indexes)`
-        # подменялось на `len(texts)`, и такой номер проходил -- а `indexes[7]`
-        # молча вешал оценку на чужой документ.
+    def test_a_position_valid_for_the_list_but_not_for_the_batch_is_dropped(self):
+        # Граница берётся по длине пачки, а не по длине всего списка. Номер 2
+        # для списка из четырёх текстов валиден, а для пачки из двух -- нет:
+        # пропустить его значит полезть в `indexes[2]`, которого не существует,
+        # и потерять всю пачку. Лишний номер должен просто отбрасываться, а
+        # остальные две оценки -- доехать.
         texts = ["нулевой", "первый", "второй", "третий"]
-        provider = Provider(scores((0, 90), (7, 50)))
-        self.assertEqual(self.run_batch(provider, texts, [2, 3]), {},
-                         "неполный набор принят как полный")
+        provider = Provider(scores((0, 90), (1, 10), (2, 50)))
+        out = self.run_batch(provider, texts, [2, 3])
+        self.assertEqual(sorted(out), [2, 3], "лишний номер утащил за собой всю пачку")
 
 
 if __name__ == "__main__":
