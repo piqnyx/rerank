@@ -4,14 +4,12 @@
   "upstream_base_url": "http://127.0.0.1:8787",
   "model": "gemini-3.5-flash-lite",
   "max_tokens_per_doc": 4096,
-  "batch_documents": 24,
-  "batch_chars": 24000,
+  "batch_documents": 800,
+  "batch_chars": 150000,
   "request_timeout_s": 60.0,
   "retries": 2,
   "log_level": "info",
   "api_key": "",
-  "model_map": {
-    "cohere/rerank-v3.5": "gemini-3.5-flash-lite"
-  },
+  "model_map": {},
   "batch_concurrency": 3
 }

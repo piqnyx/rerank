@@ -95,18 +95,42 @@ its place only when different callers should reach different backing models.
 ## Batching
 
 Documents are grouped by count and by length. A few groups are scored at a
-time — `batch_concurrency`, three by default.
+time — `batch_concurrency`, three by default. Set it to 1 to score strictly one
+after another.
 
-Strictly one after another was the first version and it was too slow to live
-with: fifty-nine documents went as three batches whose seconds added up to four,
-and a person waits through all of them before an answer starts. Strictly all at
-once is the other mistake — a burst of parallel calls against one key is exactly
-what exhausts a per-minute quota, which is the thing this was meant to relieve.
-Three at a time is neither. Set it to 1 for the old behaviour.
+**The limits are set so that grouping does not happen.** That is the opposite of
+what this section used to say, and the reason is a measurement.
 
-Because the rubric is absolute — each passage judged on its own, not against its
-neighbours — scores from different batches are comparable. A rubric that asked
-for a ranking instead would not have that property.
+It used to say that because the rubric is absolute — each passage judged on its
+own, not against its neighbours — scores from different batches are comparable.
+They are not, or not comparably enough. Fifty documents with six known answers
+among them, four runs each way, counting how many of the six landed in the top
+ten:
+
+| | runs | in the top ten | worst position |
+|---|---|---|---|
+| one batch of fifty | 5, 6, 6, 5 | **22 of 24** | 12 |
+| three batches of seventeen | 5, 4, 5, 4 | 18 of 24 | 20 |
+
+Every unsplit run beat or matched every split one. Splitting also costs three
+requests instead of one, and requests — not tokens — are what this service is
+bound by. Note also that the same input does not give the same answer twice:
+at temperature zero those four runs differ, so a single run proves nothing.
+
+The counting held far past anything real. Eight hundred passages in one call
+came back as eight hundred scores with no repeated index; fifty passages of
+eight thousand characters likewise. Real reranks from this stack are forty to
+seventy-five passages with a median length of fifty-three characters.
+
+So `batch_documents` is eight hundred — the largest count actually verified,
+not a round number above it — and the real limit is `batch_chars`. That one is
+set from the ceiling downwards rather than by taste: the proxy in front refuses
+a single request weighing more than its per-minute limit, a character of Russian
+costs about 0.58 of that weight, and so the refusal line sits near 430,000
+characters. `batch_chars` is 150,000, a third of a key's minute and three times
+under that line. The margin is not decoration: a refused batch now fails the
+whole rerank (see below), and a rerank that never splits is the one that ranks
+best.
 
 ## Passages are data
 
@@ -136,15 +160,25 @@ different statement and a believable one.
 
 ## When a batch fails
 
-Nothing is invented. A batch that cannot be scored contributes no scores, the
-response says so in `meta.warnings`, and the caller sees fewer results than
-documents. Filling the gap with plausible numbers would be worse: they are
-indistinguishable from real ones and would pass a threshold on equal terms.
+Nothing is invented. Filling a gap with plausible numbers would be worse than
+leaving it: invented scores are indistinguishable from real ones and would pass
+a threshold on equal terms.
 
-When **nothing** could be scored the answer is `502`, not an empty list with
-`200`. An empty success reads as "none of these were relevant" and the caller
-walks away satisfied, which is a different statement from "the scorer did not
-answer".
+A shortfall of any size is a `502`. Not a shorter list with a note in
+`meta.warnings` — that was the old behaviour and it was wrong twice over. The
+one client this has reads `results` and never looks at `meta`; and a shorter
+list reads exactly like "these passages were not relevant", which is a different
+statement and a believable one. Passages that could not be scored would then
+leave the recall set in silence, out of the very fifty candidates the fan-out
+was widened to fifty for.
+
+No threshold decides it: not "too few scored" but "not all scored", because a
+threshold would be a number with nowhere to come from.
+
+The cost is real and was accepted knowingly. The caller does not wrap this call,
+so one batch meeting a `429` fails its whole search rather than thinning it.
+That is loud and visible, which a quietly shortened answer is not. It is also
+why `batch_chars` leaves so much room under the proxy's refusal line.
 
 ## Comparing against the real thing
 
