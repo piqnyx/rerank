@@ -460,14 +460,36 @@ async def do_rerank(parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
 
     missing = [i for i in range(len(texts)) if i not in scores]
 
-    # Ни одной оценки. Пустой список с кодом 200 клиент прочтёт как «ничего не
-    # подошло» и пойдёт дальше с пустыми руками, хотя это отказ, а не ответ.
-    # Разница между «нерелевантно» и «не сработало» должна быть видна снаружи.
-    if not scores:
-        logger.error("nothing could be scored for %d documents", len(texts))
+    # Неполная выдача не отдаётся за полную.
+    #
+    # Пустой список с кодом 200 клиент прочтёт как «ничего не подошло» и пойдёт
+    # дальше с пустыми руками, хотя это отказ, а не ответ. Укороченный -- то же
+    # самое, только незаметнее: недостающие отрывки снаружи неотличимы от
+    # неподошедших, и правда молча выпадает из тех кандидатов, ради которых
+    # выдачу до полусотни и поднимали. Предупреждение в `meta` тут не спасает --
+    # единственный, кто нас читает, берёт `results` и в `meta` не смотрит.
+    #
+    # Без порога: не «мало оценили», а «оценили не всё». Порог был бы числом,
+    # которое неоткуда взять.
+    #
+    # Цена известна: одна пачка, поймавшая 429, роняет поиск целиком, потому что
+    # у вызывающего этот вызов ничем не обёрнут. Это громко и видно, в отличие от
+    # тихо похудевшей выдачи, а сам 429 лечится не здесь.
+    if missing:
+        logger.error(
+            "scored %d of %d documents in %d batch(es); refusing a partial ranking",
+            len(scores), len(texts), len(groups),
+        )
         return {
-            "message": f"the scoring model returned nothing usable for {len(texts)} documents",
-            "meta": {"backend": {"model": parsed["backend_model"], "batches": len(groups)}},
+            "message": (
+                f"scored {len(scores)} of {len(texts)} documents: a partial ranking "
+                f"is not returned, because it cannot be told apart from a complete one"
+            ),
+            "meta": {
+                "backend": {"model": parsed["backend_model"], "batches": len(groups)},
+                "scored": len(scores),
+                "documents": len(texts),
+            },
         }, 502
     results = []
     for index in sorted(scores, key=lambda i: -scores[i]):
@@ -490,12 +512,10 @@ async def do_rerank(parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
         top = sorted(scores, key=lambda i: -scores[i])[:8]
         for index in top:
             logger.debug("  %.3f  %s", scores[index], " ".join(texts[index].split())[:88])
-        if missing:
-            logger.debug("  без оценки: %d", len(missing))
 
     logger.info(
-        "rerank %d docs in %d batch(es), %d scored, %d unscored, %dms",
-        len(texts), len(groups), len(scores), len(missing), elapsed_ms,
+        "rerank %d docs in %d batch(es), %dms",
+        len(texts), len(groups), elapsed_ms,
     )
 
     body: Dict[str, Any] = {
@@ -509,10 +529,6 @@ async def do_rerank(parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
             "backend": {"model": parsed["backend_model"], "batches": len(groups), "took_ms": elapsed_ms},
         },
     }
-    if missing:
-        # Молчать об этом нельзя: недостающие пассажи клиент посчитает
-        # неранжированными, и лучше он узнает причину здесь, чем будет гадать.
-        body["meta"]["warnings"] = [f"{len(missing)} passage(s) could not be scored"]
     return body, 200
 
 
