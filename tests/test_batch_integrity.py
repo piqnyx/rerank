@@ -226,5 +226,54 @@ class WhatComesBackTests(Isolated):
         self.assertEqual(run(provider), {0: 0.4, 1: 0.0})
 
 
+class TwoIndexSpacesTests(unittest.TestCase):
+    """Номер внутри пачки и номер в общем списке -- разные числа.
+
+    `do_rerank` отдаёт `score_batch` весь список текстов и пачку **абсолютных**
+    номеров. Модель видит и отвечает номерами **внутри пачки**, от нуля. Три
+    строки переводят одно в другое, и при боевой нарезке в 24 документа две
+    пачки из трёх -- не тождественные.
+
+    Все образцы в обоих файлах брали `texts=("раз","два"), indexes=(0,1)`, где
+    номер внутри пачки равен общему. На таком образце все три строки -- тождество,
+    и ни одна не проверена: три однословные правки проходили весь набор, а цена
+    им -- оценка, доехавшая до чужого документа, при внешне безупречном ответе.
+    """
+
+    def setUp(self):
+        rerank.CONFIG.clear()
+        rerank.CONFIG.update(dict(rerank.DEFAULTS))
+
+    def run_batch(self, provider, texts, indexes):
+        return asyncio.run(
+            rerank.score_batch(provider, "запрос", list(texts), list(indexes), "test-model")
+        )
+
+    def test_the_model_is_shown_the_passages_the_batch_names(self):
+        texts = ["нулевой", "первый", "второй", "третий"]
+        provider = Provider(scores((0, 90), (1, 10)))
+        self.run_batch(provider, texts, [2, 3])
+        user = [m for m in provider.calls[0]["body"]["messages"] if m["role"] == "user"][0]
+        self.assertIn("второй", user["content"])
+        self.assertIn("третий", user["content"])
+        self.assertNotIn("нулевой", user["content"], "в пачку попал чужой документ")
+
+    def test_the_scores_come_back_on_the_общий_numbering(self):
+        texts = ["нулевой", "первый", "второй", "третий"]
+        provider = Provider(scores((0, 90), (1, 10)))
+        out = self.run_batch(provider, texts, [2, 3])
+        self.assertEqual(sorted(out), [2, 3], "оценки легли не на те документы")
+        self.assertGreater(out[2], out[3])
+
+    def test_a_position_outside_the_batch_is_dropped(self):
+        # Модель назвала номер, которого в пачке нет. Раньше `len(indexes)`
+        # подменялось на `len(texts)`, и такой номер проходил -- а `indexes[7]`
+        # молча вешал оценку на чужой документ.
+        texts = ["нулевой", "первый", "второй", "третий"]
+        provider = Provider(scores((0, 90), (7, 50)))
+        self.assertEqual(self.run_batch(provider, texts, [2, 3]), {},
+                         "неполный набор принят как полный")
+
+
 if __name__ == "__main__":
     unittest.main()
