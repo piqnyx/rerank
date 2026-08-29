@@ -302,19 +302,69 @@ def build_prompt(query: str, texts: List[str], indexes: List[int]) -> str:
     )
 
 
+class Refused(ValueError):
+    """Провайдер отказал, и повтор тем же телом получит тот же отказ.
+
+    Отдельный тип, потому что повтор стоит настоящего запроса из считаемой
+    квоты. Пустой ответ или сорванный сокет повторить стоит -- отказ фильтра и
+    ответ без единого варианта не стоит: те же байты дадут то же самое, а
+    графити на этой же двери уже считает такой ответ окончательным.
+    """
+
+
+def answer_text(body: Dict[str, Any]) -> str:
+    """Текст ответа, или внятная ошибка вместо него.
+
+    Провайдер может вернуть отказ, обрыв или пустоту, и все три приходят как
+    успешный ответ с пустым местом внутри. Обращение к нему вслепую роняло бы
+    KeyError или IndexError, а по ним из лога не понять, что случилось, --
+    поэтому каждый случай называется своим словом. Наверху их ловит повтор.
+
+    Ограду вокруг json снимаем: провайдеры openai-совместимой двери иногда
+    оборачивают ответ в ```json даже когда схема задана, и голый json.loads на
+    этом ломается.
+    """
+    choices = body.get("choices") or []
+    if not choices:
+        raise Refused("provider returned no choices at all")
+    choice = choices[0] if isinstance(choices[0], dict) else {}
+    reason = choice.get("finish_reason")
+    if "content_filter" in str(reason or "").lower():
+        raise Refused(f"provider refused the prompt (finish_reason={reason!r})")
+    text = (choice.get("message") or {}).get("content")
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError(f"empty answer (finish_reason={reason!r})")
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```[a-zA-Z0-9_-]*[ \t]*\r?\n?", "", stripped)
+        stripped = re.sub(r"\r?\n?```[ \t]*$", "", stripped)
+    return stripped.strip()
+
+
 async def score_batch(
     client: httpx.AsyncClient, query: str, texts: List[str], indexes: List[int], model: str
 ) -> Dict[int, float]:
-    url = f"{CONFIG['upstream_base_url'].rstrip('/')}/v1beta/models/{model}:generateContent"
+    # Дверь openai, а не родная гугловая. Родной у прокси остался ровно один
+    # ходок -- этот, -- и ради него живьём держалась целая дверь со своим
+    # разбором тела и своими настройками безопасности. Дверь одна, и говорят в
+    # неё все: чат, граф, викинг, планировщик запросов и мы.
+    url = f"{CONFIG['upstream_base_url'].rstrip('/')}/v1beta/openai/chat/completions"
     payload = {
-        "systemInstruction": {"parts": [{"text": RUBRIC}]},
-        "contents": [{"role": "user", "parts": [{"text": build_prompt(query, texts, indexes)}]}],
-        "generationConfig": {
-            # Ноль, потому что одинаковый запрос обязан давать одинаковый порядок:
-            # иначе один и тот же поиск дважды подряд вернёт разное.
-            "temperature": 0,
-            "responseMimeType": "application/json",
-            "responseSchema": SCORE_SCHEMA,
+        "model": model,
+        "messages": [
+            {"role": "system", "content": RUBRIC},
+            {"role": "user", "content": build_prompt(query, texts, indexes)},
+        ],
+        # Ноль, потому что одинаковый запрос обязан давать одинаковый порядок:
+        # иначе один и тот же поиск дважды подряд вернёт разное.
+        "temperature": 0,
+        # Без "strict": строгий режим требует своего подмножества схемы --
+        # additionalProperties: false и все поля обязательными, -- и на этой
+        # двери он не нужен: схему тут держит сам провайдер. Форма взята с
+        # графити, который ходит в ту же дверь и тем же способом.
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "scores", "schema": SCORE_SCHEMA},
         },
     }
 
@@ -325,7 +375,7 @@ async def score_batch(
             response = await client.post(url, json=payload)
             response.raise_for_status()
             body = response.json()
-            text = body["candidates"][0]["content"]["parts"][0]["text"]
+            text = answer_text(body)
             parsed = json.loads(text)
             rows = parsed.get("scores")
             if not isinstance(rows, list):
@@ -360,6 +410,24 @@ async def score_batch(
                 f"model scored {len(out)} of {len(indexes)} passages"
                 + (" and repeated an index" if duplicated else "")
             )
+        except Refused as refusal:
+            # Второй раз тем же телом -- это тот же отказ и ещё один запрос из
+            # минуты. Выходим сразу.
+            last_error = f"{type(refusal).__name__}: {refusal}"
+            break
+        except httpx.HTTPStatusError as refused:
+            # Отказ по квоте и внутренняя ошибка провайдера -- то же самое: то же
+            # тело даст тот же ответ, а каждый повтор это настоящий запрос из
+            # считаемой минуты, и уходят они без паузы, все три внутри
+            # миллисекунды. При `batch_concurrency: 3` один реранк превращался в
+            # девять заведомых отказов.
+            #
+            # Правило `Refused` завели ровно для этого и не применили к тем
+            # статусам, которые стоят пула.
+            code = refused.response.status_code
+            last_error = f"HTTPStatusError: {code}"
+            if code == 429 or code >= 500:
+                break
         except Exception as error:
             last_error = f"{type(error).__name__}: {error}"
         if attempt + 1 < attempts:
@@ -392,14 +460,36 @@ async def do_rerank(parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
 
     missing = [i for i in range(len(texts)) if i not in scores]
 
-    # Ни одной оценки. Пустой список с кодом 200 клиент прочтёт как «ничего не
-    # подошло» и пойдёт дальше с пустыми руками, хотя это отказ, а не ответ.
-    # Разница между «нерелевантно» и «не сработало» должна быть видна снаружи.
-    if not scores:
-        logger.error("nothing could be scored for %d documents", len(texts))
+    # Неполная выдача не отдаётся за полную.
+    #
+    # Пустой список с кодом 200 клиент прочтёт как «ничего не подошло» и пойдёт
+    # дальше с пустыми руками, хотя это отказ, а не ответ. Укороченный -- то же
+    # самое, только незаметнее: недостающие отрывки снаружи неотличимы от
+    # неподошедших, и правда молча выпадает из тех кандидатов, ради которых
+    # выдачу до полусотни и поднимали. Предупреждение в `meta` тут не спасает --
+    # единственный, кто нас читает, берёт `results` и в `meta` не смотрит.
+    #
+    # Без порога: не «мало оценили», а «оценили не всё». Порог был бы числом,
+    # которое неоткуда взять.
+    #
+    # Цена известна: одна пачка, поймавшая 429, роняет поиск целиком, потому что
+    # у вызывающего этот вызов ничем не обёрнут. Это громко и видно, в отличие от
+    # тихо похудевшей выдачи, а сам 429 лечится не здесь.
+    if missing:
+        logger.error(
+            "scored %d of %d documents in %d batch(es); refusing a partial ranking",
+            len(scores), len(texts), len(groups),
+        )
         return {
-            "message": f"the scoring model returned nothing usable for {len(texts)} documents",
-            "meta": {"backend": {"model": parsed["backend_model"], "batches": len(groups)}},
+            "message": (
+                f"scored {len(scores)} of {len(texts)} documents: a partial ranking "
+                f"is not returned, because it cannot be told apart from a complete one"
+            ),
+            "meta": {
+                "backend": {"model": parsed["backend_model"], "batches": len(groups)},
+                "scored": len(scores),
+                "documents": len(texts),
+            },
         }, 502
     results = []
     for index in sorted(scores, key=lambda i: -scores[i]):
@@ -422,12 +512,10 @@ async def do_rerank(parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
         top = sorted(scores, key=lambda i: -scores[i])[:8]
         for index in top:
             logger.debug("  %.3f  %s", scores[index], " ".join(texts[index].split())[:88])
-        if missing:
-            logger.debug("  без оценки: %d", len(missing))
 
     logger.info(
-        "rerank %d docs in %d batch(es), %d scored, %d unscored, %dms",
-        len(texts), len(groups), len(scores), len(missing), elapsed_ms,
+        "rerank %d docs in %d batch(es), %dms",
+        len(texts), len(groups), elapsed_ms,
     )
 
     body: Dict[str, Any] = {
@@ -441,10 +529,6 @@ async def do_rerank(parsed: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
             "backend": {"model": parsed["backend_model"], "batches": len(groups), "took_ms": elapsed_ms},
         },
     }
-    if missing:
-        # Молчать об этом нельзя: недостающие пассажи клиент посчитает
-        # неранжированными, и лучше он узнает причину здесь, чем будет гадать.
-        body["meta"]["warnings"] = [f"{len(missing)} passage(s) could not be scored"]
     return body, 200
 
 
