@@ -8,6 +8,8 @@
 
 import asyncio
 import json
+
+import httpx
 import sys
 import unittest
 from pathlib import Path
@@ -83,7 +85,7 @@ class AnswerTextTests(unittest.TestCase):
         self.assertIn("length", str(caught.exception))
 
     def test_a_refusal_is_not_read_as_an_answer(self):
-        body = {"choices": [{"finish_reason": "content_filter", "message": {}}]}
+        body = {"choices": [{"finish_reason": "content_filter: PROHIBITED_CONTENT", "message": {}}]}
         with self.assertRaises(ValueError) as caught:
             rerank.answer_text(body)
         self.assertIn("content_filter", str(caught.exception))
@@ -138,7 +140,7 @@ class TheAnswerTests(unittest.TestCase):
 
     def test_a_refusal_gives_nothing_rather_than_invented_scores(self):
         rerank.CONFIG["retries"] = 2
-        provider = Provider({"choices": [{"finish_reason": "content_filter", "message": {}}]})
+        provider = Provider({"choices": [{"finish_reason": "content_filter: PROHIBITED_CONTENT", "message": {}}]})
         self.assertEqual(run(provider), {})
         self.assertEqual(len(provider.calls), 1,
                          "отказ отправлен второй раз тем же телом")
@@ -157,6 +159,60 @@ class TheAnswerTests(unittest.TestCase):
         provider = Provider(said(""), scores((0, 40), (1, 60)))
         self.assertEqual(run(provider), {0: 0.4, 1: 0.6})
         self.assertEqual(len(provider.calls), 2)
+
+
+class ARefusalOnTheWireIsNotRetriedTests(unittest.TestCase):
+    """Отказ по квоте и внутренняя ошибка провайдера повторов не стоят.
+
+    `raise_for_status` роняет `HTTPStatusError`, а тот попадал в общий `except` и
+    уходил на повтор немедленно, без паузы: три одинаковых обращения внутри
+    миллисекунды. При `batch_concurrency: 3` один реранк -- девять заведомых
+    отказов из считаемой минуты.
+    """
+
+    def setUp(self):
+        rerank.CONFIG.clear()
+        rerank.CONFIG.update(dict(rerank.DEFAULTS))
+        rerank.CONFIG["retries"] = 2
+
+    def drive(self, status):
+        class Failing:
+            def __init__(self):
+                self.calls = []
+
+            async def post(self, url, json=None):
+                self.calls.append(url)
+                answer = Answer({})
+                answer.status = status
+
+                def raise_for_status():
+                    request = httpx.Request("POST", url)
+                    response = httpx.Response(status, request=request)
+                    raise httpx.HTTPStatusError("нет", request=request, response=response)
+
+                answer.raise_for_status = raise_for_status
+                return answer
+
+        provider = Failing()
+        return run(provider), provider
+
+    def test_a_quota_refusal_goes_once(self):
+        out, provider = self.drive(429)
+        self.assertEqual(out, {})
+        self.assertEqual(len(provider.calls), 1, "отказ по квоте отправлен повторно")
+
+    def test_a_provider_failure_goes_once(self):
+        out, provider = self.drive(500)
+        self.assertEqual(out, {})
+        self.assertEqual(len(provider.calls), 1)
+
+    def test_a_bad_request_is_still_tried_again(self):
+        # 400 -- это про наше тело, и оно между попытками не меняется, но и пула
+        # такой отказ не стоит: он не считается ни в минуту, ни в сутки. Пусть
+        # остаётся на общем пути, чтобы не заводить правило без замера.
+        out, provider = self.drive(400)
+        self.assertEqual(out, {})
+        self.assertEqual(len(provider.calls), 3)
 
 
 if __name__ == "__main__":

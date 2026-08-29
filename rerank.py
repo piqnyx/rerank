@@ -415,6 +415,19 @@ async def score_batch(
             # минуты. Выходим сразу.
             last_error = f"{type(refusal).__name__}: {refusal}"
             break
+        except httpx.HTTPStatusError as refused:
+            # Отказ по квоте и внутренняя ошибка провайдера -- то же самое: то же
+            # тело даст тот же ответ, а каждый повтор это настоящий запрос из
+            # считаемой минуты, и уходят они без паузы, все три внутри
+            # миллисекунды. При `batch_concurrency: 3` один реранк превращался в
+            # девять заведомых отказов.
+            #
+            # Правило `Refused` завели ровно для этого и не применили к тем
+            # статусам, которые стоят пула.
+            code = refused.response.status_code
+            last_error = f"HTTPStatusError: {code}"
+            if code == 429 or code >= 500:
+                break
         except Exception as error:
             last_error = f"{type(error).__name__}: {error}"
         if attempt + 1 < attempts:
