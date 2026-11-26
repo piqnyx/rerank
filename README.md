@@ -132,6 +132,29 @@ under that line. The margin is not decoration: a refused batch now fails the
 whole rerank (see below), and a rerank that never splits is the one that ranks
 best.
 
+## Reasoning level
+
+`reasoning_effort` is sent with every scoring call — `low` by default; an empty
+string sends no level at all, as the service did before. Any other word stops
+the service at start: a misspelt level would otherwise reach every request and
+be refused on every one.
+
+It is low because of a measurement (26 November, five real bodies, three runs
+of each level, on gemini-3.5-flash-lite). Low does not think at all and runs as
+fast as no level. With no level, on one body, two runs of three gave a score of
+1 or 2 out of 100 — the rubric's "nothing in common" — to some sixty unrelated
+passages; low did that in none of its runs. Above that band the levels differ
+about as much as repeated runs of one level do; on the two bodies with real
+scores the first place is the same passage in 27 runs of 30, at every level.
+High thinks thousands of tokens, and on a batch of five hundred passages met the
+door's overload and once ran past `request_timeout_s`.
+
+`xhigh` is not accepted: the proxy in front refuses it at its gate, and it is a
+level of one model that has nothing to do with scoring. `none` and `minimal` are
+not levels every model has; the proxy moves them to the nearest one the model
+the request went to has. The level in use is written in the start line of the
+log.
+
 ## Passages are data
 
 Query and passages reach the model as JSON, not as a numbered list. A passage

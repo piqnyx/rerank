@@ -55,6 +55,18 @@ DEFAULTS = {
     # быть: служба не знает ни одного ключа и не может его выдать.
     "upstream_base_url": "http://127.0.0.1:8787",
     "model": "gemini-3.5-flash-lite",
+    # Уровень размышления модели; пустая строка -- поле не уходит вовсе.
+    #
+    # Замер 26.11 (3.5-lite, пять тел из трассы по три раза на уровень): low не
+    # думает вовсе и идёт так же быстро, как без уровня. Без уровня на одном теле
+    # в двух прогонах из трёх около шестидесяти посторонних пассажей получили 1-2
+    # из 100 («ничего общего» по рубрике); на low -- ни в одном. Выше этого
+    # оценки уровней расходятся примерно как повторы одного уровня; первое место
+    # на двух телах с оценками -- одно в 27 прогонах из 30, на всех уровнях.
+    # high на пачке в пятьсот пассажей ловил перегрузку двери и
+    # раз вышел за request_timeout_s. Решение Вита -- low, в конфиге, чтобы
+    # сменить без правки кода.
+    "reasoning_effort": "low",
     # Cohere режет документ на этой длине. Повторяем, чтобы длинный пассаж не
     # раздувал запрос и вёл себя так же, как раньше.
     "max_tokens_per_doc": 4096,
@@ -157,6 +169,13 @@ SCORE_SCHEMA = {
     "required": ["scores"],
 }
 
+# Уровни, которые пропускают ворота прокси (schetchik/gatekeeper.py), и пустая
+# строка -- «без уровня». none и minimal есть не у каждой модели -- прокси
+# переводит их в ближайший у той модели, куда запрос ушёл. xhigh здесь нет:
+# выкаченный прокси его отвергает (400 на каждом запросе), и это уровень одной
+# Hydrogen, модели оценки он ни к чему.
+REASONING_EFFORTS = ("", "none", "minimal", "low", "medium", "high")
+
 app = FastAPI(title="rerank")
 
 
@@ -171,6 +190,14 @@ def load_config(path: str) -> Dict[str, Any]:
         # Опечатка в имени настройки иначе молча ничего не делает, а человек
         # уверен, что настроил.
         raise SystemExit(f"unknown settings in {path}: {', '.join(sorted(unknown))}")
+    # Опечатка в уровне ушла бы в каждый запрос и на каждом получила бы отказ
+    # двери: реранк молча перестал бы работать. Ловим её здесь, как ключ.
+    effort = config["reasoning_effort"]
+    if effort not in REASONING_EFFORTS:
+        raise SystemExit(
+            f"reasoning_effort in {path} must be one of "
+            f"{', '.join(repr(e) for e in REASONING_EFFORTS)}: got {effort!r}"
+        )
     return config
 
 
@@ -382,6 +409,9 @@ async def score_batch(
             "json_schema": {"name": "scores", "schema": SCORE_SCHEMA},
         },
     }
+    # Уровень -- из настройки; пустая строка оставляет тело без поля, как было.
+    if CONFIG["reasoning_effort"]:
+        payload["reasoning_effort"] = CONFIG["reasoning_effort"]
 
     attempts = max(1, int(CONFIG["retries"]) + 1)
     last_error: Optional[str] = None
@@ -600,8 +630,8 @@ def main() -> None:
     host = args.host or CONFIG["listen_host"]
     port = args.port or int(CONFIG["listen_port"])
     logger.info(
-        "rerank on %s:%d, model %s via %s",
-        host, port, CONFIG["model"], CONFIG["upstream_base_url"],
+        "rerank on %s:%d, model %s, reasoning %s, via %s",
+        host, port, CONFIG["model"], CONFIG["reasoning_effort"] or "none sent", CONFIG["upstream_base_url"],
     )
     uvicorn.run(app, host=host, port=port, log_level=str(CONFIG["log_level"]).lower(), access_log=False)
 
