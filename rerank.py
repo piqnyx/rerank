@@ -55,6 +55,16 @@ DEFAULTS = {
     # быть: служба не знает ни одного ключа и не может его выдать.
     "upstream_base_url": "http://127.0.0.1:8787",
     "model": "gemini-3.5-flash-lite",
+    # Уровень размышления модели; пустая строка -- поле не уходит вовсе.
+    #
+    # Без уровня 3.5-lite оценивает шумно: замер 26.11, пять тел из трассы по
+    # три раза, -- на одном из них 48 ненулевых оценок из 68 без уровня и около
+    # семи на low, medium и high; два первых места у них совпадают, остальная
+    # пятёрка -- в основном (три-четыре из пяти). Low при этом не
+    # думает вовсе и идёт так же быстро, как без уровня; high на пачке в пятьсот
+    # пассажей ловил перегрузку двери и раз вышел за request_timeout_s. Решение
+    # Вита -- low, в конфиге, чтобы сменить без правки кода.
+    "reasoning_effort": "low",
     # Cohere режет документ на этой длине. Повторяем, чтобы длинный пассаж не
     # раздувал запрос и вёл себя так же, как раньше.
     "max_tokens_per_doc": 4096,
@@ -157,6 +167,11 @@ SCORE_SCHEMA = {
     "required": ["scores"],
 }
 
+# Слова уровня, которые знает дверь (openai-совместимая у Гугла), и пустая строка
+# -- «без уровня». Какой из них возьмёт сама модель, решает прокси: он переводит
+# уровень в ближайший у той модели, куда запрос ушёл.
+REASONING_EFFORTS = ("", "none", "minimal", "low", "medium", "high", "xhigh")
+
 app = FastAPI(title="rerank")
 
 
@@ -171,6 +186,14 @@ def load_config(path: str) -> Dict[str, Any]:
         # Опечатка в имени настройки иначе молча ничего не делает, а человек
         # уверен, что настроил.
         raise SystemExit(f"unknown settings in {path}: {', '.join(sorted(unknown))}")
+    # Опечатка в уровне ушла бы в каждый запрос и на каждом получила бы отказ
+    # двери: реранк молча перестал бы работать. Ловим её здесь, как ключ.
+    effort = config["reasoning_effort"]
+    if effort not in REASONING_EFFORTS:
+        raise SystemExit(
+            f"reasoning_effort in {path} must be one of "
+            f"{', '.join(repr(e) for e in REASONING_EFFORTS)}: got {effort!r}"
+        )
     return config
 
 
@@ -382,6 +405,9 @@ async def score_batch(
             "json_schema": {"name": "scores", "schema": SCORE_SCHEMA},
         },
     }
+    # Уровень -- из настройки; пустая строка оставляет тело без поля, как было.
+    if CONFIG["reasoning_effort"]:
+        payload["reasoning_effort"] = CONFIG["reasoning_effort"]
 
     attempts = max(1, int(CONFIG["retries"]) + 1)
     last_error: Optional[str] = None
