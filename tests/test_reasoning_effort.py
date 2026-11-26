@@ -81,8 +81,19 @@ class TheSettingTests(unittest.TestCase):
     def test_the_default_is_low(self):
         self.assertEqual(rerank.DEFAULTS["reasoning_effort"], "low")
 
-    def test_a_known_level_is_taken(self):
-        self.assertEqual(load_with({"reasoning_effort": "medium"})["reasoning_effort"], "medium")
+    def test_every_level_the_proxy_takes_is_taken(self):
+        for level in ("none", "minimal", "low", "medium", "high"):
+            with self.subTest(level=level):
+                self.assertEqual(load_with({"reasoning_effort": level})["reasoning_effort"], level)
+
+    def test_xhigh_stops_the_start(self):
+        # Выкаченный прокси отвергает xhigh на воротах (schetchik/gatekeeper.py,
+        # набор уровней) ответом 400, а 400 здесь повторяется и пропадает:
+        # падал бы каждый реранк. xhigh -- уровень одной Hydrogen, модели
+        # оценки он ни к чему.
+        with self.assertRaises(SystemExit) as caught:
+            load_with({"reasoning_effort": "xhigh"})
+        self.assertIn("must be one of", str(caught.exception))
 
     def test_an_empty_level_is_taken(self):
         self.assertEqual(load_with({"reasoning_effort": ""})["reasoning_effort"], "")
